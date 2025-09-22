@@ -54,7 +54,8 @@ contract ContinueOnRevertHandler is Test {
         uint256 collateralInUsd = miaoEngine.getTokenValueInUsd(tokenAddress, amountCollateralToRedeem);
         bound(amountCollateralToRedeem, 1, amountDeposited);
         bound(amountMiaoToBurn, collateralInUsd, miaoBalance);
-        miaoEngine.redeemCollateral(tokenAddress, user, amountCollateralToRedeem, amountMiaoToBurn);
+        vm.prank(user);
+        miaoEngine.redeemCollateral(tokenAddress, amountCollateralToRedeem, amountMiaoToBurn);
     }
 
     function liquidate(uint8 userSeed, uint8 collateralTokenAddressSeed, uint256 debtToCover) public {
@@ -64,7 +65,7 @@ contract ContinueOnRevertHandler is Test {
         uint256 miaoMinted = miaoEngine.getMiaoTokenMinted(user);
         vm.assume(miaoMinted > 0);
         bound(debtToCover, 1, miaoMinted);
-        miaoEngine.liquidate(user, tokenAddresses, debtToCover);
+        miaoEngine.liquidate(user, tokenAddress, debtToCover);
     }
 
     function pickRandomAddress(address[] memory addresses, uint8 seed) private view returns (address) {

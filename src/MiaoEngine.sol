@@ -59,8 +59,8 @@ contract MiaoEngine is IMiaoEngine, Validator {
     error MiaoEngine__TransferFailed();
     error MiaoEngine__InsufficientBalance(uint256 balance);
     error MiaoEngine__MiaoToBurnExceedsUserDebt(uint256 userDebt);
-    error MiaoEngine__CollateralRatioIsBroken(uint256 collateralRatio);
-    error MiaoEngine__CollateralRatioIsNotBroken(uint256 collateralRatio);
+    error MiaoEngine__CollateralRatioIsBroken(address user, uint256 collateralRatio);
+    error MiaoEngine__CollateralRatioIsNotBroken(address user, uint256 collateralRatio);
 
     /* -------------------------------------------------------------------------- */
     /*                                  Modifiers                                 */
@@ -99,7 +99,6 @@ contract MiaoEngine is IMiaoEngine, Validator {
 
     function redeemCollateral(
         address collateralTokenAddress,
-        address collateralFrom,
         uint256 amountCollateralToRedeem,
         uint256 amountMiaoToBurn
     )
@@ -108,12 +107,9 @@ contract MiaoEngine is IMiaoEngine, Validator {
         notZeroValue(amountCollateralToRedeem)
         onlySupportedToken(collateralTokenAddress)
     {
-        _burnMiaoToken(msg.sender, collateralFrom, amountMiaoToBurn);
-        _redeemCollateral(collateralTokenAddress, amountCollateralToRedeem, collateralFrom, msg.sender);
-        _revertIfCollateralRatioIsBroken(collateralFrom);
-        if (msg.sender != collateralFrom) {
-            _revertIfCollateralRatioIsBroken(msg.sender);
-        }
+        _burnMiaoToken(msg.sender, msg.sender, amountMiaoToBurn, amountMiaoToBurn);
+        _redeemCollateral(collateralTokenAddress, amountCollateralToRedeem, msg.sender, msg.sender);
+        _revertIfCollateralRatioIsBroken(msg.sender);
     }
 
     function liquidate(address user, address collateralTokenAddress, uint256 debtToCover)
@@ -123,23 +119,33 @@ contract MiaoEngine is IMiaoEngine, Validator {
         onlySupportedToken(collateralTokenAddress)
     {
         _revertIfCollateralRatioIsNotBroken(user);
-        uint256 amountCollateral = _getTokenAmountFromUsd(collateralTokenAddress, debtToCover);
+        uint256 liquidatorBalance = s_miaoToken.balanceOf(msg.sender);
+        if (debtToCover > liquidatorBalance) {
+            debtToCover = liquidatorBalance;
+        }
+        uint256 amountCollateralToLiquidate = _getTokenAmountFromUsd(collateralTokenAddress, debtToCover);
         uint256 amountDeposited = s_collaterals[user][collateralTokenAddress];
-        if (amountCollateral > amountDeposited) {
-            revert MiaoEngine__DebtToCoverExceedsCollateralDeposited(amountDeposited);
+        if (amountCollateralToLiquidate > amountDeposited) {
+            amountCollateralToLiquidate = amountDeposited;
         }
         uint256 amountMiaoToBurn = debtToCover;
         // Give 10% bonus to liquidator
-        uint256 bonus = amountCollateral * (10 ** (PRECISION - 1)) / (10 ** PRECISION);
-        if (amountCollateral + bonus > amountDeposited) {
+        uint256 bonus = amountCollateralToLiquidate * (10 ** (PRECISION - 1)) / (10 ** PRECISION);
+        uint256 maxAmountToLiquidate = amountCollateralToLiquidate + bonus;
+        if (maxAmountToLiquidate > amountDeposited) {
             // If the collateral is not enough to cover the debt and bonus,
-            // just give all the collateral to liquidator for now, this will
-            // be improved in the future
-            amountCollateral = amountDeposited;
+            // give all the collateral to liquidator, and subtract the bonus
+            // on amount of miao token to burn
+            amountCollateralToLiquidate = amountDeposited;
+            uint256 bonusInMiaoToken = _getTokenValueInUsd(collateralTokenAddress, bonus);
+            amountMiaoToBurn -= bonusInMiaoToken;
         } else {
-            amountCollateral += bonus;
+            amountCollateralToLiquidate += bonus;
         }
-        redeemCollateral(collateralTokenAddress, user, amountCollateral, amountMiaoToBurn);
+        _burnMiaoToken(msg.sender, user, amountMiaoToBurn, debtToCover);
+        _redeemCollateral(collateralTokenAddress, amountCollateralToLiquidate, user, msg.sender);
+        _revertIfCollateralRatioIsBroken(user);
+        _revertIfCollateralRatioIsBroken(msg.sender);
     }
 
     function getCollateralRatio(address user) public view returns (uint256) {
@@ -238,27 +244,29 @@ contract MiaoEngine is IMiaoEngine, Validator {
      * @dev Burn miao token
      * @param from The account where the miao token comes from
      * @param onBehalfOf The account of which you want to be on behalf of
-     * @param amount Amount of token to burn
+     * @param amountToBurn Amount of token to burn
+     * @param debtToCover Amount of debt to cover
      */
-    function _burnMiaoToken(address from, address onBehalfOf, uint256 amount)
+    function _burnMiaoToken(address from, address onBehalfOf, uint256 amountToBurn, uint256 debtToCover)
         private
         notZeroAddress(from)
-        notZeroValue(amount)
+        notZeroValue(amountToBurn)
+        notZeroValue(debtToCover)
     {
         uint256 balance = s_miaoToken.balanceOf(from);
-        if (balance < amount) {
+        if (balance < amountToBurn) {
             revert MiaoEngine__InsufficientBalance(balance);
         }
         uint256 userMiaoMinted = s_miaoTokenMinted[onBehalfOf];
-        if (userMiaoMinted < amount) {
+        if (userMiaoMinted < debtToCover) {
             revert MiaoEngine__MiaoToBurnExceedsUserDebt(userMiaoMinted);
         }
-        s_miaoTokenMinted[onBehalfOf] -= amount;
-        bool success = s_miaoToken.transferFrom(from, address(this), amount);
+        s_miaoTokenMinted[onBehalfOf] -= debtToCover;
+        bool success = s_miaoToken.transferFrom(from, address(this), amountToBurn);
         if (!success) {
             revert MiaoEngine__TransferFailed();
         }
-        s_miaoToken.burn(address(this), amount);
+        s_miaoToken.burn(address(this), amountToBurn);
     }
 
     /**
@@ -293,7 +301,7 @@ contract MiaoEngine is IMiaoEngine, Validator {
     function _revertIfCollateralRatioIsBroken(address user) private view {
         (bool isBroken, uint256 collateralRatio) = _checkCollateralRatio(user);
         if (isBroken) {
-            revert MiaoEngine__CollateralRatioIsBroken(collateralRatio);
+            revert MiaoEngine__CollateralRatioIsBroken(user, collateralRatio);
         }
     }
 
@@ -304,7 +312,7 @@ contract MiaoEngine is IMiaoEngine, Validator {
     function _revertIfCollateralRatioIsNotBroken(address user) private view {
         (bool isBroken, uint256 collateralRatio) = _checkCollateralRatio(user);
         if (!isBroken) {
-            revert MiaoEngine__CollateralRatioIsNotBroken(collateralRatio);
+            revert MiaoEngine__CollateralRatioIsNotBroken(user, collateralRatio);
         }
     }
 

@@ -18,20 +18,18 @@ interface IMiaoEngine {
     /**
      * @dev Redeem collateral and burn miao token
      * @param collateralTokenAddress The address of collateral token contract
-     * @param collateralFrom The account address where the collateral token comes from
      * @param amountCollateralToRedeem The amount of collateral token
      * @param amountMiaoToBurn The amount of miao token to burn
      */
     function redeemCollateral(
         address collateralTokenAddress,
-        address collateralFrom,
         uint256 amountCollateralToRedeem,
         uint256 amountMiaoToBurn
     ) external;
 
     /**
-     * @dev Liquidate user's collateral when collateral ratio is less than MININUM_COLLATERAL_RATIO
-     * @param user The account address of user whose collateral ratio is less than MININUM_COLLATERAL_RATIO
+     * @dev Liquidate user's collateral when collateral ratio is less than MINIMUM_COLLATERAL_RATIO
+     * @param user The account address of user whose collateral ratio is less than MINIMUM_COLLATERAL_RATIO
      * @param collateralTokenAddress The address of collateral token contract
      * @param debtToCover The amount of debt (miao token) to cover
      */
